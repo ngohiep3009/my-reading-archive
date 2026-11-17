@@ -34,4 +34,227 @@ $('tbody').addEventListener('dragover',e=>{if(!dragId)return;const target=e.targ
 $('tbody').addEventListener('drop',e=>{e.preventDefault();document.querySelectorAll('.drop-target').forEach(x=>x.classList.remove('drop-target'));const target=e.target.closest('tr[data-id]');if(!target||!dragId||target.dataset.id===dragId)return;const sort=$('sort').value;const source=state.books.find(b=>b.id===dragId),dest=state.books.find(b=>b.id===target.dataset.id);if(sort==='score'&&Math.abs(score(source)-score(dest))>1e-8){alert('Trong chế độ xếp theo điểm, chỉ có thể đổi vị trí giữa các sách bằng điểm nhau.');return}const sorted=[...state.books].sort(sort==='score'?(a,b)=>score(b)-score(a)||(a.order??0)-(b.order??0):(a,b)=>(a.order??0)-(b.order??0));const from=sorted.findIndex(b=>b.id===dragId),to=sorted.findIndex(b=>b.id===target.dataset.id);const [moved]=sorted.splice(from,1);sorted.splice(to,0,moved);sorted.forEach((b,i)=>b.order=i);dragId=null;save()});
 $('tbody').addEventListener('dragend',()=>{dragId=null;document.querySelectorAll('.dragging,.drop-target').forEach(el=>el.classList.remove('dragging','drop-target'))});
 $('exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({...state,exportedAt:new Date().toISOString()},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='reading-archive-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};$('importBtn').onclick=()=>$('importFile').click();$('importFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{const obj=JSON.parse(await file.text());if(!Array.isArray(obj.books)||!Array.isArray(obj.criteria)||!obj.criteria.length||obj.criteria.some(c=>typeof c.id!=='string'||typeof c.name!=='string'||!(c.max>0)||!(c.step>0))||obj.books.some(b=>typeof b.id!=='string'||typeof b.title!=='string'||!Array.isArray(b.genres)))throw Error('Định dạng không hợp lệ');if(confirm('Nhập bản sao lưu sẽ thay thế toàn bộ thư viện hiện tại. Tiếp tục?')){state={books:obj.books,criteria:obj.criteria};save();alert('Đã nhập dữ liệu thành công.')}}catch(err){alert('Không thể nhập tệp: '+err.message)}e.target.value=''};render();
-</script></body></html>
+</script>
+<style>
+/* Tiêu chí có thể nhấn */
+#thead th[data-guide] {
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+
+#thead th[data-guide]:hover {
+  background: #e0d5bd;
+  color: #365b48;
+}
+
+#thead th[data-guide]::after {
+  content: " ⓘ";
+  color: #a67c40;
+  font-size: 13px;
+}
+
+/* Cửa sổ giải thích */
+#guideDialog {
+  border: 1px solid #d9c9aa;
+  border-radius: 18px;
+  width: min(570px, 92vw);
+  max-height: 85vh;
+  padding: 0;
+  background: #fffdf7;
+  color: #302e28;
+  box-shadow: 0 20px 65px #0004;
+}
+
+#guideDialog::backdrop {
+  background: #17251bcc;
+}
+
+.guide-content {
+  padding: 24px;
+}
+
+.guide-content h2 {
+  font: 27px Georgia, serif;
+  color: #365b48;
+  margin: 0 0 10px;
+}
+
+.guide-content p {
+  color: #77705f;
+  line-height: 1.7;
+}
+
+.guide-item {
+  padding: 12px 0;
+  border-bottom: 1px solid #e8dfd0;
+}
+
+.guide-item strong {
+  display: block;
+  color: #365b48;
+  margin-bottom: 5px;
+}
+
+.guide-item span {
+  font-size: 14px;
+  line-height: 1.6;
+  display: block;
+}
+</style>
+
+<dialog id="guideDialog">
+  <div class="guide-content">
+    <button
+      type="button"
+      onclick="document.getElementById('guideDialog').close()"
+      style="float:right;border:0;background:none;
+             font-size:24px;cursor:pointer;color:#365b48"
+      aria-label="Đóng"
+    >×</button>
+
+    <h2 id="guideTitle"></h2>
+    <p id="guideIntro"></p>
+    <div id="guideItems"></div>
+  </div>
+</dialog>
+
+<script>
+const ratingGuides = [
+  {
+    names: ["Trải nghiệm đọc"],
+    intro: "Đánh giá mức độ yêu thích, sự cuốn hút, cảm xúc và sự thỏa mãn trong quá trình đọc.",
+    levels: [
+      ["3,25 – 3,5 ★ | Kiệt xuất",
+       "Trải nghiệm cực kỳ tốt, gần như hoàn hảo. Rất say mê, cuốn hút và gần như không muốn dừng đọc. 3,5 là không có gì đáng chê; 3,25 là có vài hạn chế rất nhỏ."],
+
+      ["2,75 – 3 ★ | Xuất sắc",
+       "Rất thích, phần lớn thời gian đọc đều hấp dẫn. Có một số hạn chế tương đối rõ nhưng không ảnh hưởng nhiều đến cảm nhận chung."],
+
+      ["2,25 – 2,5 ★ | Tốt",
+       "Nhìn chung thích và hài lòng. Có những phần rất hay nhưng trải nghiệm chưa đồng đều."],
+
+      ["1,75 – 2 ★ | Khá",
+       "Đọc ổn, có điểm thú vị nhưng chưa thực sự cuốn hút. Cảm xúc tương đối bình thường."],
+
+      ["1,25 – 1,5 ★ | Trung bình",
+       "Trải nghiệm nhạt nhòa, ít hứng thú. Có điểm đáng ghi nhận nhưng chưa đủ để yêu thích."],
+
+      ["0,75 – 1 ★ | Kém",
+       "Không thích, nhiều đoạn gây chán hoặc thất vọng."],
+
+      ["0 – 0,5 ★ | Rất kém",
+       "Trải nghiệm rất tiêu cực, gần như không tìm thấy điều gì khiến bản thân yêu thích."]
+    ]
+  },
+  {
+    names: ["Độ đồ sộ", "Wow"],
+    intro: "Đánh giá thành tựu về quy mô hoặc sự cô đọng, không đơn thuần dựa vào số trang.",
+    levels: [
+      ["0,25 ★ | Ấn tượng đặc biệt",
+       "Tác phẩm đồ sộ với cấu trúc, thế giới và nhân vật được triển khai xuất sắc; hoặc tác phẩm ngắn nhưng truyền tải lượng nội dung, cảm xúc và ý nghĩa đáng kinh ngạc."],
+
+      ["0 ★ | Bình thường",
+       "Dung lượng tương xứng với nội dung, không tạo cảm giác đặc biệt về quy mô hay sự cô đọng."]
+    ]
+  },
+  {
+    names: ["Dấu ấn", "Dư âm"],
+    intro: "Đánh giá những cảm xúc, hình ảnh, nhân vật và suy nghĩ còn đọng lại sau khi đọc.",
+    levels: [
+      ["0,5 – 0,75 ★ | Sâu đậm, khó quên",
+       "Tác phẩm để lại cảm xúc mạnh mẽ, khiến bạn thường xuyên nghĩ về nó. 0,75 dành cho những tác phẩm thực sự khó quên; 0,5 là có dư âm rõ rệt."],
+
+      ["0,25 ★ | Có dư âm",
+       "Có một vài khoảnh khắc đáng nhớ nhưng cảm xúc chưa quá sâu hoặc tương đối nhanh phai nhạt."],
+
+      ["0 ★ | Ít dư âm",
+       "Sau khi kết thúc, gần như không có điều gì đặc biệt đọng lại."]
+    ]
+  },
+  {
+    names: ["Cái riêng", "Chiều sâu", "Giá trị"],
+    intro: "Đánh giá bản sắc nghệ thuật, chiều sâu tư tưởng, tâm lý và giá trị nhân văn.",
+    levels: [
+      ["0,25 – 0,5 ★ | Có giá trị nổi bật",
+       "0,5 dành cho tác phẩm thực sự đặc sắc, có chiều sâu hoặc nét riêng xuất sắc. 0,25 dành cho tác phẩm có giá trị đáng ghi nhận nhưng chưa quá nổi bật."],
+
+      ["0 ★ | Bình thường",
+       "Khá quen thuộc, chưa có nét riêng hoặc chiều sâu nào thực sự nổi bật."]
+    ]
+  }
+];
+
+function openRatingGuide(index) {
+  const guide = ratingGuides[index];
+  if (!guide) return;
+
+  document.getElementById("guideTitle").textContent =
+    guide.names.join(" / ");
+
+  document.getElementById("guideIntro").textContent =
+    guide.intro;
+
+  const container = document.getElementById("guideItems");
+  container.replaceChildren();
+
+  guide.levels.forEach(([title, description]) => {
+    const item = document.createElement("div");
+    item.className = "guide-item";
+
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+
+    const detail = document.createElement("span");
+    detail.textContent = description;
+
+    item.append(heading, detail);
+    container.appendChild(item);
+  });
+
+  document.getElementById("guideDialog").showModal();
+}
+
+/* Tự động gắn chức năng vào các cột tiêu chí */
+function attachRatingGuides() {
+  const headers = [...document.querySelectorAll("#thead th")];
+
+  headers.forEach(th => {
+    th.removeAttribute("data-guide");
+    th.onclick = null;
+
+    const name = th.textContent.toLowerCase();
+
+    const index = ratingGuides.findIndex(guide =>
+      guide.names.some(keyword =>
+        name.includes(keyword.toLowerCase())
+      )
+    );
+
+    if (index !== -1) {
+      th.setAttribute("data-guide", index);
+      th.title = "Nhấn để xem hướng dẫn chấm điểm";
+      th.tabIndex = 0;
+      th.setAttribute("role", "button");
+
+      th.onclick = () => openRatingGuide(index);
+
+      th.onkeydown = e => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openRatingGuide(index);
+        }
+      };
+    }
+  });
+}
+
+const guideObserver = new MutationObserver(attachRatingGuides);
+
+guideObserver.observe(
+  document.getElementById("thead"),
+  { childList: true }
+);
+
+attachRatingGuides();
+</script>
+</body></html>
